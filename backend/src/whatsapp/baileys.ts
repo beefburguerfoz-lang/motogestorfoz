@@ -89,6 +89,13 @@ async function registerMessageHandlers(currentSock: WASocket) {
         const empresaId = getCompanyId();
         if (!empresaId) {
           logger.warn({ from }, "Mensagem recebida, mas DEFAULT_COMPANY_ID não está configurado");
+          try {
+            await currentSock.sendMessage(from, {
+              text: "⚠️ Empresa não configurada. Fale com o administrador."
+            });
+          } catch (notifyError) {
+            logger.error({ notifyError, from }, "Falha ao notificar ausência de DEFAULT_COMPANY_ID");
+          }
           continue;
         }
 
