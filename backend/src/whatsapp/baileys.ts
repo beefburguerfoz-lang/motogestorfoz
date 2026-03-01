@@ -12,31 +12,87 @@ import fs from "fs";
 import path from "path";
 import { logger } from "../config/logger";
 import { processIncomingBotMessage } from "../services/botPipelineService";
+import { prisma } from "../services/prismaClient";
 
 let sock: WASocket | null = null;
 let connecting = false;
 let desiredConnection = false;
 let connected = false;
 let qrDataUrl: string | null = null;
+let resolvedCompanyIdCache: string | null = null;
 
 function getCompanyId() {
   return process.env.DEFAULT_COMPANY_ID || "";
 }
 
-function readIncomingText(message: proto.IMessage | null | undefined) {
-  if (!message) return { text: "", buttonId: null as string | null };
+async function resolveCompanyId() {
+  if (process.env.DEFAULT_COMPANY_ID) {
+    resolvedCompanyIdCache = process.env.DEFAULT_COMPANY_ID;
+    return process.env.DEFAULT_COMPANY_ID;
+  }
+
+  if (resolvedCompanyIdCache) {
+    return resolvedCompanyIdCache;
+  }
+
+  const company = await prisma.empresa.findFirst({
+    select: { id: true },
+    orderBy: { createdAt: "asc" }
+  });
+
+  if (!company?.id) return "";
+
+  resolvedCompanyIdCache = company.id;
+  logger.warn({ empresaId: company.id }, "DEFAULT_COMPANY_ID ausente; usando empresa encontrada automaticamente");
+  return company.id;
+}
+
+function unwrapMessageContent(message: proto.IMessage | null | undefined): proto.IMessage | null | undefined {
+  if (!message) return message;
+  return (
+    message.ephemeralMessage?.message ||
+    message.viewOnceMessage?.message ||
+    message.viewOnceMessageV2?.message ||
+    message.viewOnceMessageV2Extension?.message ||
+    message
+  );
+}
+
+export function extractIncomingText(message: proto.IMessage | null | undefined) {
+  const content = unwrapMessageContent(message);
+  if (!content) return { text: "", buttonId: null as string | null };
+
+  const interactiveParamsJson =
+    content.interactiveResponseMessage?.nativeFlowResponseMessage?.paramsJson || null;
+
+  let parsedInteractiveButtonId: string | null = null;
+  if (interactiveParamsJson) {
+    try {
+      const parsed = JSON.parse(String(interactiveParamsJson));
+      parsedInteractiveButtonId =
+        (parsed?.id && String(parsed.id)) ||
+        (parsed?.button_id && String(parsed.button_id)) ||
+        (parsed?.selectedId && String(parsed.selectedId)) ||
+        null;
+    } catch {
+      parsedInteractiveButtonId = String(interactiveParamsJson);
+    }
+  }
+
+  const listReplyId = content.listResponseMessage?.singleSelectReply?.selectedRowId || null;
 
   const buttonId =
-    message.buttonsResponseMessage?.selectedButtonId ||
-    message.templateButtonReplyMessage?.selectedId ||
-    message.interactiveResponseMessage?.nativeFlowResponseMessage?.paramsJson ||
+    content.buttonsResponseMessage?.selectedButtonId ||
+    content.templateButtonReplyMessage?.selectedId ||
+    listReplyId ||
+    parsedInteractiveButtonId ||
     null;
 
   const text =
-    message.conversation ||
-    message.extendedTextMessage?.text ||
-    message.imageMessage?.caption ||
-    message.videoMessage?.caption ||
+    content.conversation ||
+    content.extendedTextMessage?.text ||
+    content.imageMessage?.caption ||
+    content.videoMessage?.caption ||
     "";
 
   return { text: String(text || "").trim(), buttonId: buttonId ? String(buttonId) : null };
@@ -44,7 +100,7 @@ function readIncomingText(message: proto.IMessage | null | undefined) {
 
 async function registerMessageHandlers(currentSock: WASocket) {
   currentSock.ev.on("messages.upsert", async ({ messages, type }) => {
-    if (type !== "notify") return;
+    if (type !== "notify" && type !== "append") return;
 
     for (const msg of messages) {
       try {
@@ -54,13 +110,20 @@ async function registerMessageHandlers(currentSock: WASocket) {
         const from = msg.key.remoteJid || "";
         if (!from || from.endsWith("@broadcast") || from === "status@broadcast") continue;
 
-        const empresaId = getCompanyId();
+        const empresaId = await resolveCompanyId();
         if (!empresaId) {
           logger.warn({ from }, "Mensagem recebida, mas DEFAULT_COMPANY_ID não está configurado");
+          try {
+            await currentSock.sendMessage(from, {
+              text: "⚠️ Empresa não configurada. Fale com o administrador."
+            });
+          } catch (notifyError) {
+            logger.error({ notifyError, from }, "Falha ao notificar ausência de DEFAULT_COMPANY_ID");
+          }
           continue;
         }
 
-        const { text, buttonId } = readIncomingText(msg.message);
+        const { text, buttonId } = extractIncomingText(msg.message);
         if (!text && !buttonId) continue;
 
         await processIncomingBotMessage({
