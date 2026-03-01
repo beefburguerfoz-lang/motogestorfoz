@@ -12,39 +12,15 @@ import fs from "fs";
 import path from "path";
 import { logger } from "../config/logger";
 import { processIncomingBotMessage } from "../services/botPipelineService";
-import { prisma } from "../services/prismaClient";
 
 let sock: WASocket | null = null;
 let connecting = false;
 let desiredConnection = false;
 let connected = false;
 let qrDataUrl: string | null = null;
-let resolvedCompanyIdCache: string | null = null;
 
 function getCompanyId() {
   return process.env.DEFAULT_COMPANY_ID || "";
-}
-
-async function resolveCompanyId() {
-  if (process.env.DEFAULT_COMPANY_ID) {
-    resolvedCompanyIdCache = process.env.DEFAULT_COMPANY_ID;
-    return process.env.DEFAULT_COMPANY_ID;
-  }
-
-  if (resolvedCompanyIdCache) {
-    return resolvedCompanyIdCache;
-  }
-
-  const company = await prisma.empresa.findFirst({
-    select: { id: true },
-    orderBy: { createdAt: "asc" }
-  });
-
-  if (!company?.id) return "";
-
-  resolvedCompanyIdCache = company.id;
-  logger.warn({ empresaId: company.id }, "DEFAULT_COMPANY_ID ausente; usando empresa encontrada automaticamente");
-  return company.id;
 }
 
 function unwrapMessageContent(message: proto.IMessage | null | undefined): proto.IMessage | null | undefined {
@@ -110,7 +86,7 @@ async function registerMessageHandlers(currentSock: WASocket) {
         const from = msg.key.remoteJid || "";
         if (!from || from.endsWith("@broadcast") || from === "status@broadcast") continue;
 
-        const empresaId = await resolveCompanyId();
+        const empresaId = getCompanyId();
         if (!empresaId) {
           logger.warn({ from }, "Mensagem recebida, mas DEFAULT_COMPANY_ID não está configurado");
           try {
