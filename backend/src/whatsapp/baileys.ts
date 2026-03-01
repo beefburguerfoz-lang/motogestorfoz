@@ -12,31 +12,115 @@ import fs from "fs";
 import path from "path";
 import { logger } from "../config/logger";
 import { processIncomingBotMessage } from "../services/botPipelineService";
+import { prisma } from "../services/prismaClient";
 
 let sock: WASocket | null = null;
 let connecting = false;
 let desiredConnection = false;
 let connected = false;
 let qrDataUrl: string | null = null;
+let resolvedCompanyIdCache: string | null = null;
 
 function getCompanyId() {
   return process.env.DEFAULT_COMPANY_ID || "";
 }
 
-function readIncomingText(message: proto.IMessage | null | undefined) {
-  if (!message) return { text: "", buttonId: null as string | null };
+async function resolveCompanyId() {
+  const configuredCompanyId = getCompanyId();
+  if (configuredCompanyId) {
+    resolvedCompanyIdCache = configuredCompanyId;
+    return configuredCompanyId;
+  }
+
+  if (resolvedCompanyIdCache) {
+    return resolvedCompanyIdCache;
+  }
+
+  const companies = await prisma.empresa.findMany({
+    select: { id: true, name: true },
+    orderBy: { createdAt: "asc" },
+    take: 50
+  });
+
+  if (companies.length === 1 && companies[0]?.id) {
+    resolvedCompanyIdCache = companies[0].id;
+    logger.warn(
+      { empresaId: companies[0].id },
+      "DEFAULT_COMPANY_ID ausente; usando automaticamente a única empresa encontrada"
+    );
+    return companies[0].id;
+  }
+
+  const preferredCompanyName = (process.env.DEFAULT_COMPANY_NAME || "Empresa Cliente 01").trim().toLowerCase();
+  const preferredCompany = companies.find(
+    (company) => company.id && String(company.name || "").trim().toLowerCase() === preferredCompanyName
+  );
+
+  if (preferredCompany?.id) {
+    resolvedCompanyIdCache = preferredCompany.id;
+    logger.warn(
+      { empresaId: preferredCompany.id, companyName: preferredCompany.name },
+      "DEFAULT_COMPANY_ID ausente; usando empresa padrão por nome"
+    );
+    return preferredCompany.id;
+  }
+
+  if (companies.length > 1) {
+    logger.warn(
+      { companies: companies.map((company) => ({ id: company.id, name: company.name })) },
+      "DEFAULT_COMPANY_ID ausente e múltiplas empresas encontradas; configure DEFAULT_COMPANY_ID ou DEFAULT_COMPANY_NAME"
+    );
+  }
+
+  return "";
+}
+
+function unwrapMessageContent(message: proto.IMessage | null | undefined): proto.IMessage | null | undefined {
+  if (!message) return message;
+  return (
+    message.ephemeralMessage?.message ||
+    message.viewOnceMessage?.message ||
+    message.viewOnceMessageV2?.message ||
+    message.viewOnceMessageV2Extension?.message ||
+    message
+  );
+}
+
+export function extractIncomingText(message: proto.IMessage | null | undefined) {
+  const content = unwrapMessageContent(message);
+  if (!content) return { text: "", buttonId: null as string | null };
+
+  const interactiveParamsJson =
+    content.interactiveResponseMessage?.nativeFlowResponseMessage?.paramsJson || null;
+
+  let parsedInteractiveButtonId: string | null = null;
+  if (interactiveParamsJson) {
+    try {
+      const parsed = JSON.parse(String(interactiveParamsJson));
+      parsedInteractiveButtonId =
+        (parsed?.id && String(parsed.id)) ||
+        (parsed?.button_id && String(parsed.button_id)) ||
+        (parsed?.selectedId && String(parsed.selectedId)) ||
+        null;
+    } catch {
+      parsedInteractiveButtonId = String(interactiveParamsJson);
+    }
+  }
+
+  const listReplyId = content.listResponseMessage?.singleSelectReply?.selectedRowId || null;
 
   const buttonId =
-    message.buttonsResponseMessage?.selectedButtonId ||
-    message.templateButtonReplyMessage?.selectedId ||
-    message.interactiveResponseMessage?.nativeFlowResponseMessage?.paramsJson ||
+    content.buttonsResponseMessage?.selectedButtonId ||
+    content.templateButtonReplyMessage?.selectedId ||
+    listReplyId ||
+    parsedInteractiveButtonId ||
     null;
 
   const text =
-    message.conversation ||
-    message.extendedTextMessage?.text ||
-    message.imageMessage?.caption ||
-    message.videoMessage?.caption ||
+    content.conversation ||
+    content.extendedTextMessage?.text ||
+    content.imageMessage?.caption ||
+    content.videoMessage?.caption ||
     "";
 
   return { text: String(text || "").trim(), buttonId: buttonId ? String(buttonId) : null };
@@ -44,7 +128,7 @@ function readIncomingText(message: proto.IMessage | null | undefined) {
 
 async function registerMessageHandlers(currentSock: WASocket) {
   currentSock.ev.on("messages.upsert", async ({ messages, type }) => {
-    if (type !== "notify") return;
+    if (type !== "notify" && type !== "append") return;
 
     for (const msg of messages) {
       try {
@@ -54,13 +138,20 @@ async function registerMessageHandlers(currentSock: WASocket) {
         const from = msg.key.remoteJid || "";
         if (!from || from.endsWith("@broadcast") || from === "status@broadcast") continue;
 
-        const empresaId = getCompanyId();
+        const empresaId = await resolveCompanyId();
         if (!empresaId) {
           logger.warn({ from }, "Mensagem recebida, mas DEFAULT_COMPANY_ID não está configurado");
+          try {
+            await currentSock.sendMessage(from, {
+              text: "⚠️ Empresa não configurada. Fale com o administrador."
+            });
+          } catch (notifyError) {
+            logger.error({ notifyError, from }, "Falha ao notificar ausência de DEFAULT_COMPANY_ID");
+          }
           continue;
         }
 
-        const { text, buttonId } = readIncomingText(msg.message);
+        const { text, buttonId } = extractIncomingText(msg.message);
         if (!text && !buttonId) continue;
 
         await processIncomingBotMessage({

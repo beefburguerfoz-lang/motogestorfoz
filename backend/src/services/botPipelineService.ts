@@ -103,27 +103,28 @@ function readDispatchAction(buttonId: string | null | undefined) {
 }
 
 
-function normalizeButtonFromText(currentButtonId: string | null, text: string) {
+export function normalizeButtonFromText(currentButtonId: string | null, text: string) {
   if (currentButtonId) return currentButtonId;
   const t = (text || "").trim().toLowerCase();
 
   // menu inicial
-  if (t in ["1", "corrida", "solicitar", "solicitar corrida", "pedido"]) return "REQUEST_RIDE";
-  if (t in ["2", "cancelar", "cancelar corrida"]) return "CANCEL_ORDER";
-  if (t in ["3", "atendimento", "atendente", "suporte"]) return "TALK_ATTENDANT";
+  if (["1", "corrida", "solicitar", "solicitar corrida", "pedido"].includes(t)) return "REQUEST_RIDE";
+  if (["2", "cancelar", "cancelar corrida"].includes(t)) return "CANCEL_ORDER";
+  if (["3", "atendimento", "atendente", "suporte"].includes(t)) return "TALK_ATTENDANT";
 
   // fluxo de mercadoria
-  if (t in ["pequena", "pequeno"]) return "CARGO_SMALL";
-  if (t in ["media", "média", "medio", "médio"]) return "CARGO_MEDIUM";
-  if (t in ["grande"]) return "CARGO_LARGE";
-  if (t in ["fragil", "frágil"]) return "CARGO_FRAGILE";
+  if (["pequena", "pequeno"].includes(t)) return "CARGO_SMALL";
+  if (["media", "média", "medio", "médio"].includes(t)) return "CARGO_MEDIUM";
+  if (["grande"].includes(t)) return "CARGO_LARGE";
+  if (["fragil", "frágil"].includes(t)) return "CARGO_FRAGILE";
 
   // confirmação
-  if (t in ["confirmar", "ok", "sim", "confirmo"]) return "CONFIRM_ORDER";
-  if (t in ["revisar", "editar"]) return "REVIEW_ORDER";
+  if (["confirmar", "ok", "sim", "confirmo"].includes(t)) return "CONFIRM_ORDER";
+  if (["revisar", "editar"].includes(t)) return "REVIEW_ORDER";
 
   // observação
-  if (t in ["sem observacao", "sem observação", "pular", "nao", "não"]) return "SKIP_NOTES";
+  if (["sem observacao", "sem observação", "pular", "nao", "não"].includes(t)) return "SKIP_NOTES";
+  if (["adicionar observacao", "adicionar observação", "observacao", "observação"].includes(t)) return "ADD_NOTES";
 
   return null;
 }
@@ -226,7 +227,7 @@ export async function processIncomingBotMessage(payload: IncomingBotMessage) {
 
   switch (session.state) {
     case "IDLE":
-      await sendButtons(empresaId, from, "Olá! Escolha uma opção:\n1) Solicitar corrida\n2) Cancelar corrida\n3) Atendimento", [
+      await sendButtons(empresaId, from, "Olá! Escolha uma opção:", [
         { id: "REQUEST_RIDE", label: "Solicitar corrida" },
         { id: "CANCEL_ORDER", label: "Cancelar corrida" },
         { id: "TALK_ATTENDANT", label: "Atendimento" }
@@ -311,13 +312,18 @@ export async function processIncomingBotMessage(payload: IncomingBotMessage) {
           }
         });
         await sendButtons(empresaId, from, "📝 Deseja adicionar observação?", [
-          { id: "SKIP_NOTES", label: "Sem observação" }
+          { id: "SKIP_NOTES", label: "Sem observação" },
+          { id: "ADD_NOTES", label: "Adicionar observação" }
         ]);
-        await sendText(empresaId, from, "Se quiser, envie agora a observação em texto.");
         return;
       }
 
       if (step === "AWAITING_NOTES") {
+        if (normalizedButtonId === "ADD_NOTES") {
+          await sendText(empresaId, from, "Perfeito. Envie a observação em texto.");
+          return;
+        }
+
         const notes = normalizedButtonId === "SKIP_NOTES" ? "" : text;
         const pickup = sessionData.pickup;
         const destination = sessionData.destination;
