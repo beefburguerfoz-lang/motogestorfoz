@@ -1,0 +1,54 @@
+import React, { useEffect, useState } from "react";
+
+export const WhatsAppConnect: React.FC = () => {
+  const [status, setStatus] = useState<any>(null);
+  const [qr, setQr] = useState<string | null>(null);
+
+  const load = async () => {
+    try {
+      const s = await fetch("/api/whatsapp/status").then(r => r.json());
+      setStatus(s);
+
+      if (!s.connected) {
+        const q = await fetch("/api/whatsapp/qr").then(r => r.json());
+        setQr(q.dataUrl);
+      } else {
+        setQr(null);
+      }
+    } catch (e) {
+      console.error("Erro WhatsApp", e);
+    }
+  };
+
+  useEffect(() => {
+    load();
+    const t = setInterval(load, 3000);
+    return () => clearInterval(t);
+  }, []);
+
+  return (
+    <div className="bg-white rounded-2xl p-6 shadow-sm border space-y-4">
+      <h2 className="text-lg font-bold">Conexão WhatsApp</h2>
+
+      {status?.connected ? (
+        <div className="text-emerald-600 font-semibold">
+          ✅ WhatsApp Conectado
+        </div>
+      ) : (
+        <div className="text-amber-600 font-semibold">
+          ⚠ Aguardando Conexão
+        </div>
+      )}
+
+      {!status?.connected && qr && (
+        <img src={qr} alt="QR Code" className="w-64 h-64 border rounded-xl" />
+      )}
+
+      {!status?.connected && !qr && (
+        <div className="text-slate-400 text-sm">
+          Gerando QR Code...
+        </div>
+      )}
+    </div>
+  );
+};

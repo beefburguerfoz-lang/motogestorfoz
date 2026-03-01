@@ -1,0 +1,70 @@
+import { Request, Response, NextFunction } from 'express';
+import { AuthRequest } from '../middleware/auth';
+import { prisma } from '../services/prismaClient';
+import { logAudit } from '../services/auditService';
+
+/**
+ * Handler HTTP para criação de pedido (compatível)
+ */
+export async function createOrder(req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    const companyId = req.user?.companyId;
+    if (!companyId) return res.status(401).json({ success: false, message: 'Não autorizado' });
+
+    const { clienteId, enderecoRetirada, enderecoEntrega, valor, clienteNome, clienteTelefone } = req.body;
+
+    const order = await prisma.corrida.create({
+      data: {
+        empresaId: companyId,
+        clienteId: clienteId || null,
+        clienteNome: clienteNome || null,
+        clienteTelefone: clienteTelefone || null,
+        enderecoRetirada: enderecoRetirada || null,
+        enderecoEntrega: enderecoEntrega || null,
+        valor: valor || 0,
+        status: 'PENDENTE'
+      }
+    });
+
+    await prisma.historicoStatusCorrida.create({
+      data: { corridaId: order.id, status: 'PENDENTE' }
+    });
+
+    await logAudit({ userId: req.user?.userId, action: "ORDER_CREATED", entity: "CORRIDA", entityId: order.id });
+    return res.status(201).json({ success: true, data: order });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * Função usada por outros serviços (ex: whatsappWebhook) para criar pedido a partir de sessão
+ * Retorna o pedido criado.
+ */
+export async function createOrderFromSession(companyId: string, sessionData: any) {
+  if (!companyId) throw new Error('companyId_required');
+
+  const clienteNome = sessionData.customerName || sessionData.name || null;
+  const clienteTelefone = sessionData.phone || sessionData.customerPhone || null;
+  const enderecoRetirada = (sessionData.pickup && (sessionData.pickup.address || sessionData.pickup)) || null;
+  const enderecoEntrega = (sessionData.dropoff && (sessionData.dropoff.address || sessionData.dropoff)) || null;
+  const valor = sessionData.amount || 0;
+
+  const order = await prisma.corrida.create({
+    data: {
+      empresaId: companyId,
+      clienteNome,
+      clienteTelefone,
+      enderecoRetirada,
+      enderecoEntrega,
+      valor,
+      status: 'PENDENTE'
+    }
+  });
+
+  await prisma.historicoStatusCorrida.create({
+    data: { corridaId: order.id, status: 'PENDENTE' }
+  });
+
+  return order;
+}

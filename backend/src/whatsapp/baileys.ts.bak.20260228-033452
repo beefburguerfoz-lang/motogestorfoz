@@ -1,0 +1,189 @@
+import makeWASocket, {
+  ConnectionState,
+  DisconnectReason,
+  useMultiFileAuthState,
+  WASocket,
+  proto
+} from "@whiskeysockets/baileys";
+import qrcode from "qrcode";
+import { logger } from "../config/logger";
+import { processIncomingBotMessage } from "../services/botPipelineService";
+
+let sock: WASocket | null = null;
+let connecting = false;
+let desiredConnection = false;
+let connected = false;
+let qrDataUrl: string | null = null;
+
+function getCompanyId() {
+  return process.env.DEFAULT_COMPANY_ID || "";
+}
+
+function readIncomingText(message: proto.IMessage | null | undefined) {
+  if (!message) return { text: "", buttonId: null as string | null };
+
+  const buttonId =
+    message.buttonsResponseMessage?.selectedButtonId ||
+    message.templateButtonReplyMessage?.selectedId ||
+    message.interactiveResponseMessage?.nativeFlowResponseMessage?.paramsJson ||
+    null;
+
+  const text =
+    message.conversation ||
+    message.extendedTextMessage?.text ||
+    message.imageMessage?.caption ||
+    message.videoMessage?.caption ||
+    "";
+
+  return { text: String(text || "").trim(), buttonId: buttonId ? String(buttonId) : null };
+}
+
+async function registerMessageHandlers(currentSock: WASocket) {
+  currentSock.ev.on("messages.upsert", async ({ messages, type }) => {
+    if (type !== "notify") return;
+
+    for (const msg of messages) {
+      try {
+        if (!msg.message) continue;
+        if (msg.key.fromMe) continue;
+
+        const from = msg.key.remoteJid || "";
+        if (!from || from.endsWith("@broadcast") || from === "status@broadcast") continue;
+
+        const empresaId = getCompanyId();
+        if (!empresaId) {
+          logger.warn({ from }, "Mensagem recebida, mas DEFAULT_COMPANY_ID não está configurado");
+          continue;
+        }
+
+        const { text, buttonId } = readIncomingText(msg.message);
+        if (!text && !buttonId) continue;
+
+        await processIncomingBotMessage({
+          empresaId,
+          from,
+          text,
+          buttonId
+        });
+      } catch (error) {
+        logger.error({ error }, "Erro ao processar mensagem recebida no Baileys");
+      }
+    }
+  });
+}
+
+async function startSocket() {
+  if (connecting) return;
+  connecting = true;
+
+  try {
+    const { state, saveCreds } = await useMultiFileAuthState(".wa-session");
+
+    sock = makeWASocket({
+      auth: state,
+      printQRInTerminal: false,
+      browser: ["MotoGestor", "Chrome", "1.0.0"]
+    });
+
+    sock.ev.on("creds.update", saveCreds);
+
+    sock.ev.on("connection.update", async (update: Partial<ConnectionState>) => {
+      const { connection, qr, lastDisconnect } = update;
+
+      if (qr) {
+        qrDataUrl = await qrcode.toDataURL(qr);
+      }
+
+      if (connection === "open") {
+        connected = true;
+        connecting = false;
+        qrDataUrl = null;
+        logger.info("WhatsApp conectado com sucesso");
+      }
+
+      if (connection === "close") {
+        connected = false;
+        connecting = false;
+
+        const statusCode = (lastDisconnect?.error as any)?.output?.statusCode;
+        const shouldReconnect = statusCode !== DisconnectReason.loggedOut && desiredConnection;
+
+        logger.warn({ statusCode, shouldReconnect }, "Conexão WhatsApp encerrada");
+
+        if (shouldReconnect) {
+          await startSocket();
+        }
+      }
+    });
+
+    await registerMessageHandlers(sock);
+  } catch (error) {
+    connecting = false;
+    connected = false;
+    logger.error({ error }, "Falha ao iniciar socket do WhatsApp");
+  }
+}
+
+export async function connectWhatsApp() {
+  desiredConnection = true;
+  await startSocket();
+}
+
+export async function disconnectWhatsApp() {
+  desiredConnection = false;
+  connecting = false;
+  connected = false;
+  qrDataUrl = null;
+
+  if (sock) {
+    await sock.logout();
+    sock.end(new Error("manual_disconnect"));
+    sock = null;
+  }
+}
+
+export function getWhatsAppStatus() {
+  return {
+    connected,
+    connecting,
+    desired: desiredConnection,
+    hasQr: !!qrDataUrl
+  };
+}
+
+export function getWhatsAppQrPngDataUrl() {
+  return qrDataUrl;
+}
+
+export async function resetWhatsAppSession() {
+  await disconnectWhatsApp();
+}
+
+export async function sendBaileysText(to: string, text: string) {
+  if (!sock || !connected) {
+    throw new Error("whatsapp_not_connected");
+  }
+  return sock.sendMessage(to, { text });
+}
+
+export async function sendBaileysButtons(
+  to: string,
+  text: string,
+  buttons: { id: string; label: string }[]
+) {
+  if (!sock || !connected) {
+    throw new Error("whatsapp_not_connected");
+  }
+
+  const formattedButtons = buttons.map((button) => ({
+    buttonId: button.id,
+    buttonText: { displayText: button.label },
+    type: 1 as const
+  }));
+
+  return sock.sendMessage(to, {
+    text,
+    buttons: formattedButtons,
+    headerType: 1
+  } as any);
+}

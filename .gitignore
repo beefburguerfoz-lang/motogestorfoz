@@ -1,0 +1,12 @@
+node_modules/
+dist/
+build/
+.vite/
+.next/
+coverage/
+.env
+.env.*
+logs/
+*.log
+backend/.wa-session/
+backend/**/.wa-session/

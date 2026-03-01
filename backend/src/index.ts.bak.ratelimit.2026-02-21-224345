@@ -1,0 +1,78 @@
+import express from "express";
+
+import cors from 'cors';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
+import dotenv from 'dotenv';
+import { createServer } from 'http';
+import routes from './routes';
+import { errorHandler } from './middleware/errorHandler';
+import { logger } from './config/logger';
+import { httpLogger } from "./middleware/loggerMiddleware";
+import { initSocket } from './services/socketService';
+import whatsappRoutes from "./whatsapp/routes";
+
+dotenv.config();
+
+const app = express();
+app.set('trust proxy', 1);
+const httpServer = createServer(app);
+
+// Inicializa WebSockets
+initSocket(httpServer);
+
+// Segurança de Headers
+app.get("/", (req, res) => { res.send("MotoGestor API OK"); });
+app.get("/", (req, res) => { res.send("MotoGestor API OK"); });
+app.get("/", (req, res) => { res.send("MotoGestor API OK"); });
+app.use(helmet());
+app.use("/api/whatsapp", whatsappRoutes);
+
+// CORS Configurado
+const corsOptions = {
+  origin: process.env.FRONTEND_URL || '*',
+  optionsSuccessStatus: 200
+};
+app.get("/", (req, res) => { res.send("MotoGestor API OK"); });
+app.get("/", (req, res) => { res.send("MotoGestor API OK"); });
+app.get("/", (req, res) => { res.send("MotoGestor API OK"); });
+app.use(cors(corsOptions));
+
+app.get("/", (req, res) => { res.send("MotoGestor API OK"); });
+app.get("/", (req, res) => { res.send("MotoGestor API OK"); });
+app.get("/", (req, res) => { res.send("MotoGestor API OK"); });
+app.use(express.json());
+
+// Logger de requisições estruturado
+app.get("/", (req, res) => { res.send("MotoGestor API OK"); });
+app.get("/", (req, res) => { res.send("MotoGestor API OK"); });
+app.get("/", (req, res) => { res.send("MotoGestor API OK"); });
+app.use(httpLogger);
+
+// Rate Limit Global
+const globalLimiter = rateLimit({ 
+  windowMs: 15 * 60 * 1000, 
+  max: 1000,
+  message: { success: false, message: 'Limite de requisições excedido. Tente novamente mais tarde.' }
+});
+app.get("/", (req, res) => { res.send("MotoGestor API OK"); });
+app.get("/", (req, res) => { res.send("MotoGestor API OK"); });
+app.get("/", (req, res) => { res.send("MotoGestor API OK"); });
+app.use(globalLimiter);
+
+// Rotas da API
+app.get("/", (req, res) => { res.send("MotoGestor API OK"); });
+app.get("/", (req, res) => { res.send("MotoGestor API OK"); });
+app.get("/", (req, res) => { res.send("MotoGestor API OK"); });
+app.use('/api', routes);
+
+// Middleware de Erro Global
+app.get("/", (req, res) => { res.send("MotoGestor API OK"); });
+app.get("/", (req, res) => { res.send("MotoGestor API OK"); });
+app.get("/", (req, res) => { res.send("MotoGestor API OK"); });
+app.use(errorHandler);
+
+const port = process.env.PORT || 4000;
+httpServer.listen(port, () => {
+  logger.info(`🚀 Moto Gestor API Blindada + Realtime iniciada na porta ${port}`);
+});

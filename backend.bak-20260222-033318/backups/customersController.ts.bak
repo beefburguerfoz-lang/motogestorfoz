@@ -1,0 +1,35 @@
+import { prisma } from "../services/prismaClient";
+import { Request, Response } from "express";
+
+export async function findOrCreateCustomer(req: Request, res: Response) {
+  try {
+    const { name, whatsapp, empresaId } = req.body;
+
+    if (!empresaId || !whatsapp) {
+      return res.status(400).json({ error: "empresaId e whatsapp obrigatórios" });
+    }
+
+    let customer = await prisma.cliente.findFirst({
+      where: {
+        whatsapp,
+        empresaId
+      }
+    });
+
+    if (!customer) {
+      customer = await prisma.cliente.create({
+        data: {
+          name: name || "Cliente",
+          whatsapp,
+          empresaId
+        }
+      });
+    }
+
+    return res.json(customer);
+
+  } catch (error) {
+    console.error("findOrCreateCustomer error", error);
+    return res.status(500).json({ error: "internal_error" });
+  }
+}

@@ -1,0 +1,266 @@
+
+import React, { useState, useMemo, useEffect } from 'react';
+import { 
+  LayoutDashboard, 
+  Bike, 
+  Package, 
+  Settings, 
+  LogOut,
+  QrCode,
+  ShieldCheck,
+  BarChart3,
+  Users,
+  Bell,
+  Clock,
+  Wifi,
+  WifiOff
+} from 'lucide-react';
+import DashboardView from './components/DashboardView';
+import OrdersView from './components/OrdersView';
+import RidersView from './components/RidersView';
+import CustomersView from './components/CustomersView';
+import SettingsView from './components/SettingsView';
+import { WhatsAppConnect } from './components/WhatsAppConnect';
+import ReportsView from './components/ReportsView';
+import AdminView from './components/AdminView';
+import LoginView from './components/LoginView';
+import { Order, Rider, CompanyConfig } from './types';
+import { api } from './api';
+import { AuthProvider, useAuth } from './AuthContext';
+import { SocketProvider, useSocket } from './SocketContext';
+import { useNotify } from './components/Notification';
+
+const AppContent: React.FC = () => {
+  
+  // PATH_BASED_ROLE_GUARD
+  const isAdminHost = typeof window !== 'undefined' && window.location.hostname.startsWith('admin.');
+  const isSaasPath = typeof window !== 'undefined' && (isAdminHost || window.location.pathname.startsWith('/saasadmin'));
+const { isAuthenticated, logout, user } = useAuth();
+  const { socket, isConnected } = useSocket();
+  const { notify } = useNotify();
+  const [activeTab, setActiveTab] = useState<string>('dashboard');
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [riders, setRiders] = useState<Rider[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  
+  const [config, setConfig] = useState<CompanyConfig>({
+    pricingMode: 'KM',
+    valuePerKm: 2.50,
+    whatsAppStatus: 'DISCONNECTED',
+    autoAssignment: true
+  });
+
+  
+  // PATH_BASED_ROLE_GUARD
+  useEffect(() => {
+    if (!isAuthenticated || !user?.role) return;
+
+    // Se tentar abrir /saasadmin sem ser ADMIN -> volta pra /
+    if (isSaasPath && user.role !== 'ADMIN') {
+      if (window.location.pathname !== '/') window.history.replaceState({}, '', '/');
+      setActiveTab('dashboard');
+      return;
+    }
+
+    // Se ADMIN estiver na raiz / -> manda pro /saasadmin
+    if (!isSaasPath && user.role === 'ADMIN') {
+      // [FIX] redirect auto p/ /saasadmin removido
+      setActiveTab('companies');
+      return;
+    }
+  }, [isAuthenticated, user?.role]);
+
+  useEffect(() => {
+    if (isAuthenticated && user?.role === 'COMPANY') {
+      fetchData();
+    }
+    if (isAuthenticated && user?.role === 'ADMIN') {
+      setActiveTab('companies');
+    }
+  }, [isAuthenticated, user?.role]);
+
+  // Listener de eventos Socket.io
+  useEffect(() => {
+    if (!socket) return;
+
+    socket.on('ORDER_CREATED', (newOrder: Order) => {
+      notify('info', `Novo pedido de ${newOrder.customerName}!`);
+      setOrders(prev => [newOrder, ...prev]);
+    });
+
+    socket.on('ORDER_UPDATED', (updatedOrder: Order) => {
+      setOrders(prev => prev.map(o => o.id === updatedOrder.id ? updatedOrder : o));
+      if (updatedOrder.status === 'EM_ANDAMENTO') {
+        notify('success', `Corrida #${updatedOrder.id.slice(-4)} foi aceita!`);
+      }
+    });
+
+    socket.on('RIDER_STATUS_CHANGED', (updatedRider: Rider) => {
+      setRiders(prev => prev.map(r => r.id === updatedRider.id ? updatedRider : r));
+    });
+
+    return () => {
+      socket.off('ORDER_CREATED');
+      socket.off('ORDER_UPDATED');
+      socket.off('RIDER_STATUS_CHANGED');
+    };
+  }, [socket, notify]);
+
+  useEffect(() => {
+    if (!socket || !user?.companyId) return;
+    if (!isConnected) return;
+    socket.emit('join_company', user.companyId);
+  }, [socket, isConnected, user?.companyId]);
+
+  const fetchData = async () => {
+    setIsLoading(true);
+    try {
+      const [ordersData, ridersData] = await Promise.all([
+        api.get('/orders'),
+        api.get('/riders')
+      ]);
+      if (ordersData) setOrders(ordersData);
+      if (ridersData) setRiders(ridersData);
+    } catch (err) {
+      console.error("Erro ao carregar dados", err);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const stats = useMemo(() => ({
+    activeOrders: orders.filter(o => o.status === 'EM_ANDAMENTO' || o.status === 'PENDENTE').length,
+    totalRiders: riders.length,
+    availableRiders: riders.filter(r => r.status === 'DISPONIVEL').length,
+    todayRevenue: orders.filter(o => o.status === 'ENTREGUE').reduce((acc, curr) => acc + curr.price, 0)
+  }), [orders, riders]);
+
+  if (!isAuthenticated) {
+    return <LoginView onLogin={(role, token) => {}} />;
+  }
+
+  const renderContent = () => {
+    // === ROUTE GATE (ADMIN x COMPANY) ===
+    if (user?.role === 'ADMIN') {
+      if (!isSaasPath) window.history.replaceState({}, '', '/saasadmin');
+      return <AdminView />;
+    }
+    if (isSaasPath) window.history.replaceState({}, '', '/');
+
+
+    if (isLoading) return <div className="flex items-center justify-center h-64"><Clock className="animate-spin text-orange-500" /></div>;
+
+    switch (activeTab) {
+      case 'dashboard': return <DashboardView stats={stats} orders={orders} riders={riders} />;
+      case 'orders': return <OrdersView orders={orders} setOrders={setOrders} riders={riders} />;
+      case 'riders': return <RidersView riders={riders} setRiders={setRiders} />;
+      case 'whatsapp': return <WhatsAppConnect status={config.whatsAppStatus} onConnect={() => setConfig({...config, whatsAppStatus: 'CONNECTED'})} />;
+      case 'reports': return <ReportsView orders={orders} riders={riders} />;
+      case 'settings': return <SettingsView config={config} setConfig={setConfig} />;
+      case 'customers': return <CustomersView customers={[]} />;
+      default: return <DashboardView stats={stats} orders={orders} riders={riders} />;
+    }
+  };
+
+  // se ADMIN cair na raiz, manda pro painel SaaS
+  // (se o AuthContext já estiver injetado no App, ajuste aqui manualmente se necessário)
+  return (
+    <div className="flex h-screen bg-slate-50 overflow-hidden font-sans selection:bg-orange-100 selection:text-orange-900">
+      <aside className="w-72 bg-slate-900 text-white flex flex-col shrink-0">
+        <div className="p-8 flex items-center gap-4">
+          <div className="bg-orange-500 p-2.5 rounded-2xl shadow-lg shadow-orange-500/20">
+            <Bike size={24} className="text-white" strokeWidth={2.5} />
+          </div>
+          <div>
+            <span className="font-black text-xl tracking-tight block leading-none">MOTO</span>
+            <span className="text-orange-500 font-bold text-xs uppercase tracking-[0.2em]">{user?.role === 'ADMIN' ? 'Gestor SaaS' : 'Operação'}</span>
+          </div>
+        </div>
+
+        <nav className="flex-1 px-4 py-4 space-y-1 overflow-y-auto">
+          {user?.role === 'ADMIN' ? (
+            <>
+              <div className="px-4 py-2 text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2">Administração</div>
+              <NavItem icon={<ShieldCheck size={20} />} label="Infraestrutura" active={activeTab === 'companies'} onClick={() => setActiveTab('companies')} />
+              <NavItem icon={<BarChart3 size={20} />} label="Métricas SaaS" active={activeTab === 'reports-admin'} onClick={() => setActiveTab('reports-admin')} />
+            </>
+          ) : (
+            <>
+              <div className="px-4 py-2 text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2">Operação</div>
+              <NavItem icon={<LayoutDashboard size={20}/>} label="Painel Geral" active={activeTab === 'dashboard'} onClick={() => setActiveTab('dashboard')} />
+              <NavItem icon={<Package size={20}/>} label="Corridas" active={activeTab === 'orders'} onClick={() => setActiveTab('orders')} />
+              <NavItem icon={<Bike size={20}/>} label="Motoboys" active={activeTab === 'riders'} onClick={() => setActiveTab('riders')} />
+              <div className="px-4 py-2 text-[10px] font-bold text-slate-500 uppercase tracking-widest mt-6 mb-2">Comunicação</div>
+              <NavItem icon={<QrCode size={20}/>} label="WhatsApp Bot" active={activeTab === 'whatsapp'} onClick={() => setActiveTab('whatsapp')} />
+              <NavItem icon={<Users size={20}/>} label="Clientes" active={activeTab === 'customers'} onClick={() => setActiveTab('customers')} />
+              <div className="px-4 py-2 text-[10px] font-bold text-slate-500 uppercase tracking-widest mt-6 mb-2">Administração</div>
+              <NavItem icon={<BarChart3 size={20}/>} label="Financeiro" active={activeTab === 'reports'} onClick={() => setActiveTab('reports')} />
+              <NavItem icon={<Settings size={20}/>} label="Configurações" active={activeTab === 'settings'} onClick={() => setActiveTab('settings')} />
+            </>
+          )}
+        </nav>
+
+        <div className="p-4 border-t border-white/5">
+          <div className="bg-white/5 rounded-3xl p-4 mb-4">
+             <div className="flex items-center gap-3 mb-3">
+                <div className="w-10 h-10 rounded-2xl bg-orange-500 flex items-center justify-center font-bold text-white text-sm">
+                   {user?.role === 'ADMIN' ? 'SA' : 'MF'}
+                </div>
+                <div>
+                   <p className="text-xs font-bold text-white truncate max-w-[120px]">{user?.email}</p>
+                   <p className="text-[10px] text-slate-400">ID: {user?.id.substring(0,5)}</p>
+                </div>
+             </div>
+             <button onClick={logout} className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-red-400 hover:bg-red-500/10 transition-colors text-xs font-bold">
+               <LogOut size={16} /> Sair do Sistema
+             </button>
+          </div>
+        </div>
+      </aside>
+
+      <main className="flex-1 flex flex-col h-full relative overflow-hidden">
+        <header className="h-20 bg-white border-b flex items-center justify-between px-10 shrink-0">
+          <div className="flex items-center gap-6">
+            <h2 className="font-black text-slate-800 uppercase tracking-wider text-sm">{activeTab.replace('-', ' ')}</h2>
+            <div className="h-4 w-px bg-slate-200"></div>
+            <div className="flex items-center gap-2 text-xs font-bold text-slate-400">
+               <Clock size={14} /> {new Date().toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' })}
+            </div>
+          </div>
+          
+          <div className="flex items-center gap-4">
+             <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-[10px] font-bold border transition-all ${isConnected ? 'bg-emerald-50 border-emerald-100 text-emerald-600' : 'bg-red-50 border-red-100 text-red-600 animate-pulse'}`}>
+                {isConnected ? <Wifi size={14} /> : <WifiOff size={14} />}
+                {isConnected ? 'LIVE FEED ATIVO' : 'FEED DESCONECTADO'}
+             </div>
+             <button className="relative p-2 text-slate-400 hover:text-slate-600 transition-colors">
+                <Bell size={20} />
+                <span className="absolute top-1 right-1 w-2 h-2 bg-orange-500 rounded-full border-2 border-white"></span>
+             </button>
+          </div>
+        </header>
+        <div className="flex-1 overflow-auto bg-[#F8FAFC]">
+          <div className="max-w-[1600px] mx-auto p-10">
+            {renderContent()}
+          </div>
+        </div>
+      </main>
+    </div>
+  );
+};
+
+const NavItem: React.FC<{ icon: React.ReactNode, label: string, active: boolean, onClick: () => void }> = ({ icon, label, active, onClick }) => (
+  <button onClick={onClick} className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-2xl transition-all duration-200 ${active ? 'bg-orange-500 text-white shadow-lg shadow-orange-500/20 translate-x-1' : 'text-slate-400 hover:bg-white/5 hover:text-slate-200'}`}>
+    {icon} <span className="font-bold text-sm">{label}</span>
+  </button>
+);
+
+const App: React.FC = () => (
+  <AuthProvider>
+    <SocketProvider>
+      <AppContent />
+    </SocketProvider>
+  </AuthProvider>
+);
+
+export default App;

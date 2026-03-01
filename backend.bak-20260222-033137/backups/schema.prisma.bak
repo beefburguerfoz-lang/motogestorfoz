@@ -1,0 +1,150 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum EstadoConversa {
+  IDLE
+  AWAITING_PICKUP
+  AWAITING_DROPOFF
+  AWAITING_CONFIRMATION
+  COMPLETED
+}
+
+model Empresa {
+  id        String   @id @default(uuid())
+  name      String?
+  cnpj      String?
+  telefone  String?
+  plan      String?
+  status    String?
+  createdAt DateTime @default(now())
+
+  users    User[]
+  clientes Cliente[]
+  motoboys Motoboy[]
+  corridas Corrida[]
+  regras   RegraPreco[]
+}
+
+model User {
+  id           String    @id @default(uuid())
+  name         String?
+  email        String    @unique
+  passwordHash String
+  role         String?
+  empresaId    String
+  createdAt    DateTime  @default(now())
+  deletedAt    DateTime?
+
+  empresa Empresa @relation(fields: [empresaId], references: [id])
+}
+
+model Cliente {
+  id        String    @id @default(uuid())
+  name      String
+  whatsapp  String?
+  empresaId String
+  createdAt DateTime  @default(now())
+  deletedAt DateTime?
+
+  empresa  Empresa   @relation(fields: [empresaId], references: [id])
+  corridas Corrida[]
+
+  @@unique([whatsapp, empresaId], name: "whatsapp_empresaId")
+}
+
+model Motoboy {
+  id            String    @id @default(uuid())
+  name          String
+  telefone      String?
+  tipoBag       String?
+  tamanhoBag    String?
+  empresaId     String
+  ativo         Boolean   @default(true)
+  status        String?
+  totalEarnings Float?    @default(0)
+  createdAt     DateTime  @default(now())
+  deletedAt     DateTime?
+
+  empresa  Empresa   @relation(fields: [empresaId], references: [id])
+  corridas Corrida[]
+}
+
+model Corrida {
+  id               String    @id @default(uuid())
+  clienteNome      String?
+  clienteTelefone  String?
+  origem           String?
+  destino          String?
+  enderecoRetirada String?
+  enderecoEntrega  String?
+  bairroRetirada   String?
+  bairroEntrega    String?
+  valor            Float?
+  status           String?
+  empresaId        String
+  clienteId        String?
+  motoboyId        String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime? @updatedAt
+  deletedAt        DateTime?
+
+  empresa   Empresa                  @relation(fields: [empresaId], references: [id])
+  cliente   Cliente?                 @relation(fields: [clienteId], references: [id])
+  motoboy   Motoboy?                 @relation(fields: [motoboyId], references: [id])
+  historico HistoricoStatusCorrida[]
+}
+
+model HistoricoStatusCorrida {
+  id        String   @id @default(uuid())
+  corridaId String
+  status    String
+  createdAt DateTime @default(now())
+
+  corrida Corrida @relation(fields: [corridaId], references: [id])
+}
+
+model RegraPreco {
+  id        String   @id @default(uuid())
+  key       String?
+  bairro    String?
+  valor     Float?
+  type      String?
+  basePrice Float?
+  perKm     Float?
+  minPrice  Float?
+  empresaId String
+  createdAt DateTime @default(now())
+
+  empresa Empresa @relation(fields: [empresaId], references: [id])
+}
+
+model ConversationSession {
+  id           String         @id @default(uuid())
+  phone        String
+  state        EstadoConversa @default(IDLE)
+  companyId    String
+  companyPhone String?
+  pickup       String?
+  dropoff      String?
+  data         Json?
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  @@unique([companyId, phone], name: "companyId_phone")
+}
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  action    String
+  entity    String
+  entityId  String?
+  metadata  Json?
+  userId    String?
+  createdAt DateTime @default(now())
+}

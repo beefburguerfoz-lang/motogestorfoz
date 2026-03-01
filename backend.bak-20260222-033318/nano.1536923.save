@@ -1,0 +1,16 @@
+import { prisma } from "../lib/prisma";
+
+export async function calculatePrice(empresaId: string, distanciaKm: number) {
+  const regra = await prisma.regraPreco.findFirst({
+    where: {
+      empresaId: String(empresaId),
+    },
+  });
+
+  if (!regra) {
+    throw new Error("Regra de preço não encontrada");
+  }
+
+  const preco = Number(regra.precoBase) + distanciaKm * Number(regra.precoKm);
+  return preco;
+}
