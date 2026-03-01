@@ -23,20 +23,52 @@ function getCompanyId() {
   return process.env.DEFAULT_COMPANY_ID || "";
 }
 
-function readIncomingText(message: proto.IMessage | null | undefined) {
-  if (!message) return { text: "", buttonId: null as string | null };
+function unwrapMessageContent(message: proto.IMessage | null | undefined): proto.IMessage | null | undefined {
+  if (!message) return message;
+  return (
+    message.ephemeralMessage?.message ||
+    message.viewOnceMessage?.message ||
+    message.viewOnceMessageV2?.message ||
+    message.viewOnceMessageV2Extension?.message ||
+    message
+  );
+}
+
+export function extractIncomingText(message: proto.IMessage | null | undefined) {
+  const content = unwrapMessageContent(message);
+  if (!content) return { text: "", buttonId: null as string | null };
+
+  const interactiveParamsJson =
+    content.interactiveResponseMessage?.nativeFlowResponseMessage?.paramsJson || null;
+
+  let parsedInteractiveButtonId: string | null = null;
+  if (interactiveParamsJson) {
+    try {
+      const parsed = JSON.parse(String(interactiveParamsJson));
+      parsedInteractiveButtonId =
+        (parsed?.id && String(parsed.id)) ||
+        (parsed?.button_id && String(parsed.button_id)) ||
+        (parsed?.selectedId && String(parsed.selectedId)) ||
+        null;
+    } catch {
+      parsedInteractiveButtonId = String(interactiveParamsJson);
+    }
+  }
+
+  const listReplyId = content.listResponseMessage?.singleSelectReply?.selectedRowId || null;
 
   const buttonId =
-    message.buttonsResponseMessage?.selectedButtonId ||
-    message.templateButtonReplyMessage?.selectedId ||
-    message.interactiveResponseMessage?.nativeFlowResponseMessage?.paramsJson ||
+    content.buttonsResponseMessage?.selectedButtonId ||
+    content.templateButtonReplyMessage?.selectedId ||
+    listReplyId ||
+    parsedInteractiveButtonId ||
     null;
 
   const text =
-    message.conversation ||
-    message.extendedTextMessage?.text ||
-    message.imageMessage?.caption ||
-    message.videoMessage?.caption ||
+    content.conversation ||
+    content.extendedTextMessage?.text ||
+    content.imageMessage?.caption ||
+    content.videoMessage?.caption ||
     "";
 
   return { text: String(text || "").trim(), buttonId: buttonId ? String(buttonId) : null };
@@ -44,7 +76,7 @@ function readIncomingText(message: proto.IMessage | null | undefined) {
 
 async function registerMessageHandlers(currentSock: WASocket) {
   currentSock.ev.on("messages.upsert", async ({ messages, type }) => {
-    if (type !== "notify") return;
+    if (type !== "notify" && type !== "append") return;
 
     for (const msg of messages) {
       try {
@@ -60,7 +92,7 @@ async function registerMessageHandlers(currentSock: WASocket) {
           continue;
         }
 
-        const { text, buttonId } = readIncomingText(msg.message);
+        const { text, buttonId } = extractIncomingText(msg.message);
         if (!text && !buttonId) continue;
 
         await processIncomingBotMessage({

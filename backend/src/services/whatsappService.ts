@@ -19,5 +19,12 @@ export async function sendButtons(
   buttons: { id: string; label: string }[]
 ) {
   logger.info({ companyId, to, text, buttons }, "WhatsApp: Enviando botões (Baileys)");
-  return sendBaileysButtons(to, text, buttons);
+
+  try {
+    return await sendBaileysButtons(to, text, buttons);
+  } catch (error) {
+    logger.warn({ companyId, to, error }, "WhatsApp: Falha ao enviar botões; usando fallback de texto discreto");
+    const fallback = `${text}\n\n${buttons.map((b) => `• ${b.label}`).join("\n")}`;
+    return sendBaileysText(to, fallback);
+  }
 }
