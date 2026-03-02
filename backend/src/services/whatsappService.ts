@@ -1,5 +1,5 @@
 import { logger } from "../config/logger";
-import { sendBaileysButtons, sendBaileysText } from "../whatsapp/baileys";
+import { sendBaileysButtons, sendBaileysList, sendBaileysText } from "../whatsapp/baileys";
 
 /**
  * Envia mensagem de texto via sessão ativa do Baileys.
@@ -24,16 +24,36 @@ export async function sendButtons(
 
   if (buttons.length > 3) {
     logger.warn(
-      { companyId, to, buttonCount: buttons.length },
-      "WhatsApp: Mensagem com mais de 3 botões não é suportada; usando fallback textual visível"
+      { companyId, to, uiType: "list", buttonCount: buttons.length },
+      "WhatsApp: Mensagem com mais de 3 opções; enviando listMessage"
     );
-    return sendBaileysText(to, visibleOptionsText);
+    try {
+      return await sendBaileysList(to, text, buttons);
+    } catch (listError) {
+      logger.warn(
+        { companyId, to, uiType: "text", listError },
+        "WhatsApp: Falha ao enviar listMessage; usando fallback textual visível"
+      );
+      return sendBaileysText(to, visibleOptionsText);
+    }
   }
 
   try {
-    return await sendBaileysButtons(to, visibleOptionsText, buttons);
+    logger.info({ companyId, to, uiType: "buttons", buttonCount: buttons.length }, "WhatsApp: Tentando buttonsMessage");
+    return await sendBaileysButtons(to, text, buttons);
   } catch (error) {
-    logger.warn({ companyId, to, error }, "WhatsApp: Falha ao enviar botões; usando fallback de texto discreto");
-    return sendBaileysText(to, visibleOptionsText);
+    logger.warn(
+      { companyId, to, uiType: "list", reason: "buttons_failed", error },
+      "WhatsApp: Falha ao enviar buttonsMessage; tentando listMessage"
+    );
+    try {
+      return await sendBaileysList(to, text, buttons);
+    } catch (listError) {
+      logger.warn(
+        { companyId, to, uiType: "text", reason: "list_failed", listError },
+        "WhatsApp: Falha ao enviar listMessage; usando fallback textual visível"
+      );
+      return sendBaileysText(to, visibleOptionsText);
+    }
   }
 }

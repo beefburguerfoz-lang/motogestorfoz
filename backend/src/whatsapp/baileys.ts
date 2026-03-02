@@ -393,3 +393,31 @@ export async function sendBaileysButtons(
     headerType: 1
   } as any);
 }
+
+export async function sendBaileysList(
+  to: string,
+  text: string,
+  options: { id: string; label: string }[]
+) {
+  if (!sock || !connected) {
+    throw new Error("whatsapp_not_connected");
+  }
+
+  const rows = options.slice(0, 10).map((option) => ({
+    title: option.label,
+    rowId: option.id,
+    description: ""
+  }));
+
+  return sock.sendMessage(to, {
+    text,
+    footer: "Selecione uma opção",
+    buttonText: "Ver opções",
+    sections: [
+      {
+        title: "Opções disponíveis",
+        rows
+      }
+    ]
+  } as any);
+}
