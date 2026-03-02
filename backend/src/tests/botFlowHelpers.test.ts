@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 
-import { extractIncomingText } from "../whatsapp/baileys";
+import { extractIncomingText, resolveCompanyIdFromCandidates } from "../whatsapp/baileys";
 import { normalizeButtonFromText } from "../services/botPipelineService";
 
 test("extractIncomingText parses interactive paramsJson id", () => {
@@ -67,4 +67,38 @@ test("pipeline source keeps full button-first flow markers", () => {
   assert.match(source, /\{ id: "REVIEW_ORDER", label: "Revisar" \}/);
   assert.match(source, /\{ id: "CANCEL_ORDER", label: "Cancelar" \}/);
   assert.ok(!source.includes("1) Solicitar corrida"));
+});
+
+test("resolveCompanyIdFromCandidates prefers binding", () => {
+  const result = resolveCompanyIdFromCandidates({
+    bindingCompanyId: "company-binding",
+    companies: [
+      { id: "company-a", name: "MotoGestor" },
+      { id: "company-b", name: "Empresa Cliente 01" }
+    ]
+  });
+
+  assert.equal(result.companyId, "company-binding");
+  assert.equal(result.source, "binding");
+});
+
+test("resolveCompanyIdFromCandidates auto picks single company", () => {
+  const result = resolveCompanyIdFromCandidates({
+    companies: [{ id: "company-only", name: "MotoGestor" }]
+  });
+
+  assert.equal(result.companyId, "company-only");
+  assert.equal(result.source, "auto_single");
+});
+
+test("resolveCompanyIdFromCandidates auto picks Empresa Cliente 01 when exactly two companies", () => {
+  const result = resolveCompanyIdFromCandidates({
+    companies: [
+      { id: "company-a", name: "MotoGestor" },
+      { id: "company-b", name: "Empresa Cliente 01" }
+    ]
+  });
+
+  assert.equal(result.companyId, "company-b");
+  assert.equal(result.source, "auto_test_company");
 });

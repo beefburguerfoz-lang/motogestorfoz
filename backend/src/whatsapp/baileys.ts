@@ -20,39 +20,146 @@ let desiredConnection = false;
 let connected = false;
 let qrDataUrl: string | null = null;
 let resolvedCompanyIdCache: string | null = null;
+const companyBindingFile = process.env.WA_COMPANY_BINDING_FILE
+  ? path.resolve(process.env.WA_COMPANY_BINDING_FILE)
+  : path.resolve(process.cwd(), ".wa-company-binding.json");
+
+type CompanyBinding = {
+  companyId: string;
+  companyName?: string | null;
+  connectedJid?: string | null;
+  updatedAt: string;
+};
+
+type CompanyCandidate = { id: string; name?: string | null };
 
 function getCompanyId() {
   return process.env.DEFAULT_COMPANY_ID || "";
 }
 
-async function resolveCompanyId() {
-  const configuredCompanyId = getCompanyId();
-  if (configuredCompanyId) {
-    resolvedCompanyIdCache = configuredCompanyId;
-    return configuredCompanyId;
+function readCompanyBinding(): CompanyBinding | null {
+  try {
+    if (!fs.existsSync(companyBindingFile)) return null;
+    const raw = fs.readFileSync(companyBindingFile, "utf8");
+    const parsed = JSON.parse(raw);
+    const companyId = parsed?.companyId || parsed?.empresaId;
+    if (!companyId) return null;
+    return {
+      companyId: String(companyId),
+      companyName: parsed.companyName ? String(parsed.companyName) : null,
+      connectedJid: parsed.connectedJid ? String(parsed.connectedJid) : null,
+      updatedAt: String(parsed.updatedAt || new Date().toISOString())
+    };
+  } catch (error) {
+    logger.error({ error }, "Falha ao ler vínculo WhatsApp-empresa");
+    return null;
+  }
+}
+
+function writeCompanyBinding(binding: CompanyBinding) {
+  try {
+    fs.writeFileSync(companyBindingFile, JSON.stringify(binding, null, 2));
+  } catch (error) {
+    logger.error({ error }, "Falha ao salvar vínculo WhatsApp-empresa");
+  }
+}
+
+export async function setWhatsAppCompanyBinding(companyId: string) {
+  const company = await prisma.empresa.findUnique({ where: { id: companyId }, select: { id: true, name: true } });
+  if (!company?.id) {
+    throw new Error("company_not_found");
   }
 
-  if (resolvedCompanyIdCache) {
-    return resolvedCompanyIdCache;
+  const binding: CompanyBinding = {
+    companyId: company.id,
+    companyName: company.name || null,
+    connectedJid: sock?.user?.id || null,
+    updatedAt: new Date().toISOString()
+  };
+  writeCompanyBinding(binding);
+  resolvedCompanyIdCache = company.id;
+  logger.warn({ companyId: company.id, companyName: company.name }, "Vínculo WhatsApp-empresa atualizado");
+  return binding;
+}
+
+export function getWhatsAppCompanyBinding() {
+  return readCompanyBinding();
+}
+
+export function getWhatsAppCompanyBindingFilePath() {
+  return companyBindingFile;
+}
+
+export function resolveCompanyIdFromCandidates(input: {
+  bindingCompanyId?: string | null;
+  companies: CompanyCandidate[];
+}) {
+  if (input.bindingCompanyId) {
+    return { companyId: input.bindingCompanyId, source: "binding" as const };
   }
 
-  const companies = await prisma.empresa.findMany({
-    select: { id: true },
-    orderBy: { createdAt: "asc" },
-    take: 2
-  });
+  if (input.companies.length === 1 && input.companies[0]?.id) {
+    return { companyId: input.companies[0].id, source: "auto_single" as const };
+  }
 
-  if (companies.length === 1 && companies[0]?.id) {
-    resolvedCompanyIdCache = companies[0].id;
-    logger.warn(
-      { empresaId: companies[0].id },
-      "DEFAULT_COMPANY_ID ausente; usando automaticamente a única empresa encontrada"
+  if (input.companies.length === 2) {
+    const testCompany = input.companies.find(
+      (company) => String(company.name || "").trim().toLowerCase() === "empresa cliente 01"
     );
-    return companies[0].id;
+    if (testCompany?.id) {
+      return { companyId: testCompany.id, source: "auto_test_company" as const };
+    }
   }
 
-  if (companies.length > 1) {
-    logger.warn("DEFAULT_COMPANY_ID ausente e múltiplas empresas encontradas; configure a variável de ambiente");
+  return { companyId: null, source: "unresolved" as const };
+}
+
+async function resolveCompanyId() {
+  try {
+    const companyBinding = readCompanyBinding();
+    if (companyBinding?.companyId) {
+      resolvedCompanyIdCache = companyBinding.companyId;
+      logger.info({ companyId: companyBinding.companyId, source: "binding", companyBindingFile }, "companyId resolvido");
+      return companyBinding.companyId;
+    }
+
+    if (resolvedCompanyIdCache) {
+      logger.info({ companyId: resolvedCompanyIdCache, source: "cache" }, "companyId resolvido");
+      return resolvedCompanyIdCache;
+    }
+
+    const companies = await prisma.empresa.findMany({
+      select: { id: true, name: true },
+      orderBy: { createdAt: "asc" },
+      take: 50
+    });
+
+    const selected = resolveCompanyIdFromCandidates({
+      bindingCompanyId: null,
+      companies
+    });
+
+    if (selected.companyId) {
+      resolvedCompanyIdCache = selected.companyId;
+      logger.warn({ companyId: selected.companyId, source: selected.source }, "companyId resolvido");
+      return selected.companyId;
+    }
+
+    const configuredCompanyId = getCompanyId();
+    if (configuredCompanyId) {
+      resolvedCompanyIdCache = configuredCompanyId;
+      logger.info({ companyId: configuredCompanyId, source: "env" }, "companyId resolvido");
+      return configuredCompanyId;
+    }
+
+    if (companies.length > 1) {
+      logger.warn(
+        { companies: companies.map((company) => ({ id: company.id, name: company.name })) },
+        "Não foi possível resolver companyId automaticamente; configure vínculo em /api/whatsapp/company-binding"
+      );
+    }
+  } catch (error) {
+    logger.error({ error, companyBindingFile }, "Falha ao resolver companyId no WhatsApp");
   }
 
   return "";
@@ -179,7 +286,15 @@ async function startSocket() {
         connected = true;
         connecting = false;
         qrDataUrl = null;
-        logger.info("WhatsApp conectado com sucesso");
+        const binding = readCompanyBinding();
+        if (binding?.companyId) {
+          writeCompanyBinding({
+            ...binding,
+            connectedJid: sock?.user?.id || binding.connectedJid || null,
+            updatedAt: new Date().toISOString()
+          });
+        }
+        logger.info({ companyBindingFile, connectedJid: sock?.user?.id || null }, "WhatsApp conectado com sucesso");
       }
 
       if (connection === "close") {
