@@ -29,6 +29,8 @@ const AdminView: React.FC = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [newCompany, setNewCompany] = useState({ name: '', cnpj: '', plan: 'TESTE' });
+  const [isSavingCompany, setIsSavingCompany] = useState(false);
+  const [processingCompanyId, setProcessingCompanyId] = useState<string | null>(null);
   const { notify } = useNotify();
   const { socket } = useSocket();
   const [activeSubTab, setActiveSubTab] = useState<'instances' | 'tests'>('instances');
@@ -73,6 +75,46 @@ const AdminView: React.FC = () => {
     } catch (err) {
       notify('error', 'Falha ao disparar simulação');
       setIsSimulating(false);
+    }
+  };
+
+  const handleCreateCompany = async () => {
+    const payload = {
+      name: newCompany.name.trim(),
+      cnpj: newCompany.cnpj.trim() || undefined,
+      plan: newCompany.plan
+    };
+
+    if (!payload.name) {
+      notify('error', 'Informe o nome da empresa');
+      return;
+    }
+
+    setIsSavingCompany(true);
+    try {
+      await api.post('/companies', payload);
+      notify('success', 'Empresa cadastrada com sucesso');
+      setShowModal(false);
+      setNewCompany({ name: '', cnpj: '', plan: 'TESTE' });
+      await fetchCompanies();
+    } catch (err: any) {
+      notify('error', err?.message || 'Falha ao cadastrar empresa');
+    } finally {
+      setIsSavingCompany(false);
+    }
+  };
+
+  const handleToggleCompanyStatus = async (company: Company) => {
+    const nextStatus = company.status === 'ATIVA' ? 'BLOQUEADA' : 'ATIVA';
+    setProcessingCompanyId(company.id);
+    try {
+      await api.patch(`/companies/${company.id}/status`, { status: nextStatus });
+      notify('success', `Empresa ${nextStatus === 'ATIVA' ? 'ativada' : 'bloqueada'} com sucesso`);
+      await fetchCompanies();
+    } catch (err: any) {
+      notify('error', err?.message || 'Falha ao atualizar status da empresa');
+    } finally {
+      setProcessingCompanyId(null);
     }
   };
 
@@ -220,7 +262,14 @@ const AdminView: React.FC = () => {
                         </td>
                         <td className="px-6 py-5"><StatusBadge status={company.status} /></td>
                         <td className="px-6 py-5 text-right">
-                          <button className="p-2 text-slate-400 hover:text-slate-600"><Ban size={18} /></button>
+                          <button
+                            onClick={() => handleToggleCompanyStatus(company)}
+                            disabled={processingCompanyId === company.id}
+                            title={company.status === 'ATIVA' ? 'Bloquear empresa' : 'Ativar empresa'}
+                            className="p-2 text-slate-400 hover:text-slate-600 disabled:opacity-40"
+                          >
+                            {processingCompanyId === company.id ? <Loader2 size={18} className="animate-spin" /> : <Ban size={18} />}
+                          </button>
                         </td>
                       </tr>
                     ))}
@@ -230,6 +279,75 @@ const AdminView: React.FC = () => {
             </div>
           </div>
         </>
+      )}
+
+      {showModal && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
+          <div className="w-full max-w-lg bg-white rounded-2xl border shadow-xl p-6 space-y-5">
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-bold text-slate-900">Nova Empresa</h2>
+              <button
+                onClick={() => setShowModal(false)}
+                className="text-slate-400 hover:text-slate-700"
+                aria-label="Fechar"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              <div className="space-y-1">
+                <label className="text-xs font-bold uppercase text-slate-500">Nome</label>
+                <input
+                  value={newCompany.name}
+                  onChange={(e) => setNewCompany((prev) => ({ ...prev, name: e.target.value }))}
+                  className="w-full border rounded-xl px-3 py-2 text-sm"
+                  placeholder="Nome da empresa"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-xs font-bold uppercase text-slate-500">CNPJ</label>
+                <input
+                  value={newCompany.cnpj}
+                  onChange={(e) => setNewCompany((prev) => ({ ...prev, cnpj: e.target.value }))}
+                  className="w-full border rounded-xl px-3 py-2 text-sm"
+                  placeholder="Opcional"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-xs font-bold uppercase text-slate-500">Plano</label>
+                <select
+                  value={newCompany.plan}
+                  onChange={(e) => setNewCompany((prev) => ({ ...prev, plan: e.target.value }))}
+                  className="w-full border rounded-xl px-3 py-2 text-sm bg-white"
+                >
+                  <option value="TESTE">TESTE</option>
+                  <option value="BASIC">BASIC</option>
+                  <option value="SaaS">SaaS</option>
+                  <option value="PREMIUM">PREMIUM</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setShowModal(false)}
+                className="px-4 py-2 text-sm rounded-xl border"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={handleCreateCompany}
+                disabled={isSavingCompany}
+                className="px-4 py-2 text-sm rounded-xl bg-orange-500 text-white font-bold disabled:opacity-60"
+              >
+                {isSavingCompany ? 'Salvando...' : 'Salvar'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

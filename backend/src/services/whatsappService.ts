@@ -19,5 +19,21 @@ export async function sendButtons(
   buttons: { id: string; label: string }[]
 ) {
   logger.info({ companyId, to, text, buttons }, "WhatsApp: Enviando botões (Baileys)");
-  return sendBaileysButtons(to, text, buttons);
+
+  const visibleOptionsText = `${text}\n\n${buttons.map((b) => `• ${b.label}`).join("\n")}`;
+
+  if (buttons.length > 3) {
+    logger.warn(
+      { companyId, to, buttonCount: buttons.length },
+      "WhatsApp: Mensagem com mais de 3 botões não é suportada; usando fallback textual visível"
+    );
+    return sendBaileysText(to, visibleOptionsText);
+  }
+
+  try {
+    return await sendBaileysButtons(to, visibleOptionsText, buttons);
+  } catch (error) {
+    logger.warn({ companyId, to, error }, "WhatsApp: Falha ao enviar botões; usando fallback de texto discreto");
+    return sendBaileysText(to, visibleOptionsText);
+  }
 }
