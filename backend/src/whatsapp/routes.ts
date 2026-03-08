@@ -75,4 +75,26 @@ router.post("/company-binding", async (req, res) => {
   }
 });
 
+// vínculo persistente da instância WhatsApp com empresa
+router.get("/company-binding", (_req, res) => {
+  res.json({ binding: getWhatsAppCompanyBinding(), filePath: getWhatsAppCompanyBindingFilePath() });
+});
+
+router.post("/company-binding", async (req, res) => {
+  const companyId = String(req.body?.companyId || req.body?.empresaId || "").trim();
+  if (!companyId) {
+    return res.status(400).json({ ok: false, message: "companyId obrigatório" });
+  }
+
+  try {
+    const binding = await setWhatsAppCompanyBinding(companyId);
+    return res.json({ ok: true, binding });
+  } catch (error: any) {
+    if (error?.message === "company_not_found") {
+      return res.status(404).json({ ok: false, message: "Empresa não encontrada" });
+    }
+    return res.status(500).json({ ok: false, message: "Falha ao salvar vínculo" });
+  }
+});
+
 export default router;
