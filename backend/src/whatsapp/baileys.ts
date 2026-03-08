@@ -19,6 +19,7 @@ let connecting = false;
 let desiredConnection = false;
 let connected = false;
 let qrDataUrl: string | null = null;
+let lastError: string | null = null;
 let resolvedCompanyIdCache: string | null = null;
 const companyBindingFile = process.env.WA_COMPANY_BINDING_FILE
   ? path.resolve(process.env.WA_COMPANY_BINDING_FILE)
@@ -280,12 +281,14 @@ async function startSocket() {
 
       if (qr) {
         qrDataUrl = await qrcode.toDataURL(qr);
+        lastError = null;
       }
 
       if (connection === "open") {
         connected = true;
         connecting = false;
         qrDataUrl = null;
+        lastError = null;
         const binding = readCompanyBinding();
         if (binding?.companyId) {
           writeCompanyBinding({
@@ -303,6 +306,7 @@ async function startSocket() {
 
         const statusCode = (lastDisconnect?.error as any)?.output?.statusCode;
         const shouldReconnect = statusCode !== DisconnectReason.loggedOut && desiredConnection;
+        lastError = statusCode ? `connection_closed_${statusCode}` : "connection_closed";
 
         logger.warn({ statusCode, shouldReconnect }, "Conexão WhatsApp encerrada");
 
@@ -316,12 +320,14 @@ async function startSocket() {
   } catch (error) {
     connecting = false;
     connected = false;
+    lastError = (error as Error)?.message || "start_socket_failed";
     logger.error({ error }, "Falha ao iniciar socket do WhatsApp");
   }
 }
 
 export async function connectWhatsApp() {
   desiredConnection = true;
+  lastError = null;
   await startSocket();
 }
 
@@ -332,9 +338,19 @@ export async function disconnectWhatsApp() {
   qrDataUrl = null;
 
   if (sock) {
-    await sock.logout();
-    sock.end(new Error("manual_disconnect"));
-    sock = null;
+    try {
+      await sock.logout();
+    } catch (error) {
+      lastError = (error as Error)?.message || "logout_failed";
+      logger.warn({ error }, "Falha no logout do WhatsApp; continuando com encerramento local da sessão");
+    } finally {
+      try {
+        sock.end(new Error("manual_disconnect"));
+      } catch (endError) {
+        logger.warn({ endError }, "Falha ao encerrar socket localmente");
+      }
+      sock = null;
+    }
   }
 }
 
@@ -343,7 +359,8 @@ export function getWhatsAppStatus() {
     connected,
     connecting,
     desired: desiredConnection,
-    hasQr: !!qrDataUrl
+    hasQr: !!qrDataUrl,
+    lastError
   };
 }
 
@@ -352,7 +369,12 @@ export function getWhatsAppQrPngDataUrl() {
 }
 
 export async function resetWhatsAppSession() {
-  await disconnectWhatsApp();
+  try {
+    await disconnectWhatsApp();
+  } catch (disconnectError) {
+    lastError = (disconnectError as Error)?.message || "disconnect_failed_on_reset";
+    logger.warn({ disconnectError }, "Falha durante disconnect no reset; tentando limpar sessão mesmo assim");
+  }
 
   const sessionDir = path.resolve(process.cwd(), ".wa-session");
   try {
@@ -361,6 +383,7 @@ export async function resetWhatsAppSession() {
       logger.warn({ sessionDir }, "Sessão WhatsApp removida para forçar novo QR");
     }
   } catch (error) {
+    lastError = (error as Error)?.message || "session_cleanup_failed";
     logger.error({ error, sessionDir }, "Falha ao limpar .wa-session");
   }
 }
